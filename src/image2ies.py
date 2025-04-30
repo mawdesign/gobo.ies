@@ -1,13 +1,14 @@
 import numpy as np
 from PIL import Image, ImageOps
 import polarTransform  # https://github.com/addisonElliott/polarTransform
-import io
+import argparse
+import os
 import datetime
 import sys
 import textwrap
 
 
-def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas):
+def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, image_file = "image"):
     """
     Generates an IES file string from the provided photometric data.
 
@@ -128,6 +129,8 @@ def image_to_ies(
             3 - bicubic
     """
     try:
+        image_file = os.path.basename(image_path) if os.path.isfile(image_path) else "image not found"
+
         # Open the image using PIL (Pillow)
         img = (
             Image.open(image_path).convert("L").rotate(90)
@@ -181,7 +184,7 @@ def image_to_ies(
         header_data = {}
 
         ies_string = generate_ies_string(
-            header_data, lamp_data, unique_theta, unique_phi, intensity_data
+            header_data, lamp_data, unique_theta, unique_phi, intensity_data, image_file
         )
 
         # Save the IES string to a file
@@ -198,24 +201,36 @@ def image_to_ies(
 
 
 if __name__ == "__main__":
-    image_file = "hi.jpg"
+    """
+    Main function to parse command line arguments and call the processing function.
+    """
+    parser = argparse.ArgumentParser(description="Generate IES files from an image.")
+    parser.add_argument("image_file", metvar="image.jpg", help="Path to the image.")
+    parser.add_argument("-o", "--output", type=argparse.FileType('w'), metvar="output.ies", help="Output filename.")
+    parser.add_argument("-b", "--beam_angle", type=float, default=30, help="Beam angle for the IES generation (degrees).")
+    parser.add_argument("-c", "--max_candela", type=float, default=1000, help="Maximum candela value for the IES generation.")
+    parser.add_argument("-t", "--theta_step", type=float, default=1.0, help="Step size for vertical angles (theta) in degrees. Defaults to 1.0.")
+    parser.add_argument("-p", "--phi_step", type=float, default=2.5, help="Step size for horizontal angles (phi) in degrees. Defaults to 5.0.")
+
+    args = parser.parse_args()
+
     try:
-        img = Image.open(image_file)
+        img = Image.open(args.image_file)
     except FileNotFoundError:
         img = Image.new("L", (100, 100), color=127)
-        img.save(image_file)
+        img.save(args.image_file)
 
-    beam_angle = 60.0
-    max_candela_value = 1000.0
-    output_filename = "my_light.ies"
-    theta_step_size = 1
-    phi_step_size = 2.5
+    if args.output is None:
+        output_filename = os.path.splitext(os.path.basename(args.image_file))[0] + ".ies"
+    if os.path.splitext(output_filename)[1].lower() != ".ies":
+        output_filename = os.path.splitext(output_filename)[0] + ".ies"
 
+    # Call the function to process the image
     image_to_ies(
-        image_file,
-        beam_angle,
-        max_candela_value,
+        args.image_file,
+        args.beam_angle,
+        args.max_candela,
         output_filename,
-        theta_step_size,
-        phi_step_size,
+        args.theta_step,
+        args.phi_step,
     )
