@@ -23,18 +23,37 @@ def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, im
     Returns:
         str: The IES file content as a string.
     """
-    # IES file header
-    ies_header = "IES:LM-63-2019\n"
+    # Make IES file compliant with IES LM-63-2019 format spcification
+    #
+    # Add required headers if not supplied
     if "TEST" not in header_data:
-        header_data["TEST"] = f" "
+        header_data["TEST"] = ""
     if "TESTLAB" not in header_data:
         header_data["TESTLAB"] = "Image2ies"
     if "MANUFAC" not in header_data:
-        header_data["MANUFAC"] = "Generic"
+        header_data["MANUFAC"] = "Generic Gobo"
     if "ISSUEDATE" not in header_data:
         header_data["ISSUEDATE"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if "FILEGENINFO" not in header_data:
         header_data["FILEGENINFO"] = f"Generated from {image_file}"
+
+    # Ensure vertical angles end at 90 or 180 degrees
+    if v_angles[-1] not in (90, 180) and v_angles[-1] < 180:
+        curr_angle = v_angles[-1]
+        theta_step = v_angles[-1] - v_angles[-2]
+        zero_col = np.zeros((len(candelas),1))
+        while curr_angle not in (90, 180) and curr_angle < 180:
+            curr_angle += theta_step
+            candelas = np.hstack((candelas, zero_col))
+            v_angles = np.append(v_angles, curr_angle)
+    if v_angles[-1] > 180:
+        if v_angles[-2] < 180:
+            v_angles[-1] = 180
+        else:
+            raise Exception(f"vertical angles (theta values) exceed 180° (..., {v_angles[-3]}, {v_angles[-2]}, {v_angles[-1]})")
+
+    # IES file header
+    ies_header = "IES:LM-63-2019\n"
     ies_header += "\n".join(
         [f"[{k}] {v}".replace("\n", "\n[MORE] ") for (k, v) in header_data.items()]
     )
@@ -54,7 +73,7 @@ def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, im
     v_angle_str = (
         "\n".join(
             textwrap.wrap(
-                " ".join(f"{v:.1f}".rstrip("0").rstrip(".") for v in v_angles), 256
+                " ".join(f"{v:.1f}".rstrip("0").rstrip(".") for v in v_angles), 255
             )
         )
         + "\n"
@@ -72,17 +91,17 @@ def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, im
     candela_str = ""
     for row in candelas:
         candela_str += (
-            "\n".join(
+            " \n".join(
                 textwrap.wrap(
-                    " ".join(f"{c:.1f}".rstrip("0").rstrip(".") for c in row), 256
+                    " ".join(f"{c:.1f}".rstrip("0").rstrip(".") for c in row), 255
                 )
             )
             + "\n"
         )
     candela_str += (
-        "\n".join(
+        " \n".join(
             textwrap.wrap(
-                " ".join(f"{c:.1f}".rstrip("0").rstrip(".") for c in candelas[0]), 256
+                " ".join(f"{c:.1f}".rstrip("0").rstrip(".") for c in candelas[0]), 255
             )
         )
         + "\n"
@@ -90,12 +109,68 @@ def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, im
 
     # Combine all parts
     ies_string = ies_header + lamp_data_str + v_angle_str + h_angle_str + candela_str
+
+    # Check for lines that exceed recommended max of 256 characters
     lnum = 0
+    long_lines = []
     for ln in ies_string.splitlines():
         lnum += 1
         if len(ln) > 256:
-            print(f"Line {lnum} exceeds 256 characters ({len(ln)} chars)")
+            long_lines.append((lnum,len(ln)))
+    if long_lines:
+        print(f"{len(long_lines)} line{'s' if len(long_lines) != 1 else ''} exceed{'s' if len(long_lines) == 1 else ''} 256 characters.")
+        print(f"(e.g. line {long_lines[0][0]} is {long_lines[0][1]} characters)")
     return ies_string
+
+
+def s_curve(x, median=0.5, slope=0.5, start=0, end=1, minimum=0, maximum=1):
+    """
+    Returns a value on an s-curve where:
+      start   is the x axis curve start
+      end     is the x axis curve end
+      minimum is the y axis curve low point
+      maximum is the y axis curve high point
+      slope   is a value between 0 and 1 for the steepness of the curve
+        0 gives a straight line at 45°
+        1 gives a vertical line
+    """
+
+    # The curve alogrthym
+    def f(x, n, c):
+        match (x, n, c):
+            case (x, n, c) if x <= 0:
+                y = 0
+            case (x, n, c) if x <= n:
+                y = x**c / n ** (c - 1)
+            case (x, n, c) if x <= 1:
+                y = 1 - (1 - x) ** c / (1 - n) ** (c - 1)
+            case _:
+                y = 1
+        return y
+
+    # set parameters
+    p = (median - start) / (end - start)
+    h = maximum - minimum
+    c = 2 / (1 - slope) - 1
+
+    # find 'n' for f(p) = 0.5
+    if c == 1:
+        n = 0.5
+    elif p > 0.5:
+        n = (2 * p**c) ** (1 / (c - 1))
+    else:
+        n = 1 - (2 * (1 - p) ** c) ** (1 / (c - 1))
+
+    # return array if array sent
+    if isinstance(x, np.ndarray):
+        y_list = [minimum + h * f((x1 - start) / (end - start), n, c) for x1 in x]
+        y = np.fromiter(y_list, float)
+    # ... or list if other collection sent
+    elif isinstance(x, (list, tuple, set, dict)):
+        y = [minimum + h * f((x1 - start) / (end - start), n, c) for x1 in x]
+    else:
+        y = f(minimum + h * (x1 - start) / (end - start), n, c)
+    return y
 
 
 def image_to_ies(
@@ -103,9 +178,11 @@ def image_to_ies(
     beam_angle,
     max_candela,
     filename="output.ies",
+    source_ies=False,
     theta_step=5.0,
     phi_step=5.0,
     sample_type=3,
+    edge_fade=False,
 ):
     """
     Generates an IES file from an image, using the image's grayscale values
@@ -113,13 +190,13 @@ def image_to_ies(
 
     Args:
         image_path (str): Path to the input image file (e.g., JPEG, PNG).
-        beam_angle_deg (float): The beam angle of the light source in degrees.
+        beam_angle (float): The beam angle of the light source in degrees.
         max_candela (float): The maximum luminous intensity (candela) of the
                            light source.
         filename (str, optional): The name of the output IES file.
             Defaults to "output.ies".
         theta_step (float, optional): Step size for vertical angles (theta) in degrees.
-            Defaults to 1.0 degree.
+            Defaults to 5.0 degrees.
         phi_step (float, optional): Step size for horizontal angles (phi) in degrees.
             Defaults to 5.0 degrees.
         sample_type (int, optional): The order of the spline interpolation, default is 3. The order has to be in the range 0-5.
@@ -129,19 +206,55 @@ def image_to_ies(
             3 - bicubic
     """
     try:
-        image_file = os.path.basename(image_path) if os.path.isfile(image_path) else "image not found"
+        if source_ies:
+            if not os.path.isfile(source_ies):
+                raise FileNotFoundError(source_ies)
+            if not os.path.isfile(image_path):
+                raise FileNotFoundError(image_path)
+            from luxpy import iolidfiles as iolid
+            LID = iolid.read_lamp_data(source_ies)
+            print('LID keys:', LID.keys())
+            print(LID['values'])
+            pixels = LID['values']
+            # iolid.draw_lid(LID)
+            exit()
 
-        # Open the image using PIL (Pillow)
-        img = (
-            Image.open(image_path).convert("L").rotate(90)
-        )  # Convert to grayscale and rotate
-        img = ImageOps.mirror(img)  # Mirror
-        pixels = np.array(img)
+        if image_path == "white":
+            image_file = "user defined shape"
+            img = Image.new("L", (100, 100), color=255)
+            pixels = np.array(img)
+            width, height = img.size
+        elif os.path.isfile(image_path):
+            image_file = os.path.basename(image_path)
+            # Open the image using PIL (Pillow)
+            with Image.open(image_path) as img:
+                img = img.convert("L") #.rotate(90) # Convert to grayscale and rotate
+                img = ImageOps.mirror(img)  # Mirror
+                pixels = np.array(img)
+                width, height = img.size
+        else:
+            raise FileNotFoundError(image_path)
+
 
         # Calculate the radius of the largest centered circle
-        width, height = img.size
         radius = min(width, height) // 2
         beam_angle_deg = beam_angle / 2 + theta_step
+        if edge_fade:
+            match edge_fade:
+                case [a, b, c, *_]: # at least 3 values
+                    edge_fade = [a, b, c]
+                    beam_angle_deg += b
+                case [a, b]:
+                    edge_fade = [a, b, 0.5]
+                    beam_angle_deg += b
+                case [a]:
+                    edge_fade = [a, a, 0.5]
+                    beam_angle_deg += a
+                case [] | True:
+                    edge_fade = [theta_step * 2, theta_step * 2, 0.5]
+                    beam_angle_deg += theta_step * 2
+                case _:
+                    edge_fade = False
 
         # Convert to a polar image
         polarImage, ptSettings = polarTransform.convertToPolarImage(
@@ -164,9 +277,21 @@ def image_to_ies(
 
         # Calculate luminous intensity
         intensity_data = polarImage * max_candela / max_pixel_value
+        if edge_fade:
+            fade_values = s_curve(
+                unique_theta,
+                start=beam_angle / 2 + edge_fade[0],
+                end=beam_angle / 2 - edge_fade[1],
+                median=beam_angle / 2,
+                slope=edge_fade[2]
+            )
+            intensity_data = np.multiply(intensity_data, fade_values)
 
         # Create the IES file
         # Metadata for the IES file
+        header_data = {}
+        header_data["FILEGENINFO"] = f"Generated from {image_file}"
+
         lamp_data = {
             "lamp_count": 1,
             "lumens": -1,  # for absolute = -1, otherwise use max_candela,
@@ -175,16 +300,14 @@ def image_to_ies(
             "units_type": 2,
             "lamp_width": -0.01,
             "lamp_length": -0.01,
-            "lamp_height": 0.01,
+            "lamp_height": 0,
             "ballast_factor": 1,
             "file_gen_type": 1.00010,
             "input_watts": 10,
         }
 
-        header_data = {}
-
         ies_string = generate_ies_string(
-            header_data, lamp_data, unique_theta, unique_phi, intensity_data, image_file
+            header_data, lamp_data, unique_theta, unique_phi, intensity_data
         )
 
         # Save the IES string to a file
@@ -200,37 +323,78 @@ def image_to_ies(
         print(f"An error occurred: {e} in line {exc_tb.tb_lineno}")
 
 
+def get_command_line():
+    '''
+    Get command line arguments
+    '''
+    parser = argparse.ArgumentParser(description="Generate IES files from an image.")
+    parser.add_argument("image_file", metavar="<image.jpg>", help="Path to the image.")
+    parser.add_argument("-o", "--output", metavar="<output.ies>", help="Output filename.")
+    parser.add_argument("-s", "--source", metavar="<source.ies>", help="Filename of an .ies file to use as the source distribution.")
+    parser.add_argument("-b", "--beam_angle", type=float, default=30, help="Beam angle for the IES generation (degrees).")
+    parser.add_argument("-c", "--max_candela", type=float, default=1000, help="Maximum candela value for the IES generation.")
+    parser.add_argument("-t", "--theta_step", type=float, default=1.0, help="Step size for vertical angles (theta) in degrees. Defaults to %(default)s°.")
+    parser.add_argument("-p", "--phi_step", type=float, default=2.5, help="Step size for horizontal angles (phi) in degrees. Defaults to %(default)s°.")
+    parser.add_argument("-e", "--edge_fade", nargs="*", type=float, default=False, help="Fade edge optionally followed by to 3 values to specify shape\n[width inside beam], [width outside beam] (degrees), and [slope] (ratio)")
+    args = parser.parse_args()
+
+    # sanity and rule checks
+    if args.image_file.lower() != "white" and not os.path.isfile(args.image_file):
+        raise FileNotFoundError(image_path)
+    if args.source:
+        args.edge_fade = False
+        if not os.path.isfile(args.source):
+            raise FileNotFoundError(args.source)
+        if not os.path.isfile(args.image_file):
+            raise FileNotFoundError(image_path)
+
+    return args
+
 if __name__ == "__main__":
     """
     Main function to parse command line arguments and call the processing function.
     """
-    parser = argparse.ArgumentParser(description="Generate IES files from an image.")
-    parser.add_argument("image_file", metvar="image.jpg", help="Path to the image.")
-    parser.add_argument("-o", "--output", type=argparse.FileType('w'), metvar="output.ies", help="Output filename.")
-    parser.add_argument("-b", "--beam_angle", type=float, default=30, help="Beam angle for the IES generation (degrees).")
-    parser.add_argument("-c", "--max_candela", type=float, default=1000, help="Maximum candela value for the IES generation.")
-    parser.add_argument("-t", "--theta_step", type=float, default=1.0, help="Step size for vertical angles (theta) in degrees. Defaults to 1.0.")
-    parser.add_argument("-p", "--phi_step", type=float, default=2.5, help="Step size for horizontal angles (phi) in degrees. Defaults to 5.0.")
+    args = get_command_line()
 
-    args = parser.parse_args()
-
+    # verify input image file
     try:
         img = Image.open(args.image_file)
+        img.close()
+        image_file = args.image_file
     except FileNotFoundError:
-        img = Image.new("L", (100, 100), color=127)
-        img.save(args.image_file)
+        if args.image_file.lower() == "white":
+            image_file = "white"
+        else:
+            raise
 
+    # verify output .ies file
     if args.output is None:
         output_filename = os.path.splitext(os.path.basename(args.image_file))[0] + ".ies"
-    if os.path.splitext(output_filename)[1].lower() != ".ies":
-        output_filename = os.path.splitext(output_filename)[0] + ".ies"
+    elif os.path.splitext(args.output)[1].lower() != ".ies":
+        output_filename = os.path.splitext(args.output)[0] + ".ies"
+    else:
+        output_filename = str(args.output)
+
+    match args.edge_fade:
+        case [a, b, c, *_]: # at least 3 values
+            edge_fade = [a, b, c]
+        case [a, b]:
+            edge_fade = [a, b, 0.5]
+        case [a]:
+            edge_fade = [a, a, 0.5]
+        case [] | True:
+            edge_fade = [args.theta_step, args.theta_step, 0.5]
+        case _:
+            edge_fade = False
 
     # Call the function to process the image
     image_to_ies(
-        args.image_file,
+        image_file,
         args.beam_angle,
         args.max_candela,
-        output_filename,
-        args.theta_step,
-        args.phi_step,
+        filename=output_filename,
+        source_ies=args.source,
+        theta_step=args.theta_step,
+        phi_step=args.phi_step,
+        edge_fade=edge_fade,
     )
