@@ -45,20 +45,21 @@ This will install the following packages:
    * `-s <source.ies>, --source <source.ies>` (optional): Filename of an .ies file to use as the source distribution.
    * `-a, --allow_spill` (optional): If using <source.ies>, allow spill light from beyond beam angle.
    * `-b, --beam_angle BEAM_ANGLE_DEG` (optional): The beam angle of the light source in degrees.
-   * `-e [EDGE_FADE ...], --edge_fade [shape parameters ...]` (optional): Fade edge optionally followed by up to 3 values to specify shape: 
-      &nbsp; &nbsp; &nbsp; `[WIDTH_INSIDE_BEAM]` (degrees) width of fade inside beam angle,
-      &nbsp; &nbsp; &nbsp; `[WIDTH_OUTSIDE_BEAM]` (degrees) width of fade beyond beam angle, and 
-      &nbsp; &nbsp; &nbsp; `[SLOPE]` (ratio), a slope of 0 is linear, 0.5 is a smooth s-curve, 1 is a sharp edge (same as no edge fade).
+   * `-e [EDGE_FADE ...], --edge_fade [shape parameters ...]` (optional): Fade edge optionally followed by up to 3 values to specify shape:
+      * `[WIDTH_INSIDE_BEAM]` (degrees) width of fade inside beam angle,
+      * `[WIDTH_OUTSIDE_BEAM]` (degrees) width of fade beyond beam angle, and
+      * `[SLOPE]` (ratio), a slope of 0 is linear, 0.5 is a smooth s-curve, 1 is a sharp edge (same as no edge fade).
    * `-c, --max_candela MAX_CANDELA` (optional): The maximum luminous intensity (candela) of the light source.
    * `-t, --theta_step THETA_STEP` (optional): Step size for vertical angles (theta) in degrees. Defaults to 1.0 degree.
    * `-p, --phi_step PHI_STEP` (optional): Step size for horizontal angles (phi) in degrees. Defaults to 2.5 degrees.
    * `<image.jpg>`: Path to the input image file (e.g., JPEG, PNG).
-   For example:
-   ```bash
-   python src/image2ies.py -b 60 -c 1000 -t 5 -p 10 -o my_light.ies example_image.jpg
-   ```
-   This will generate an IES file named `my_light.ies` based on the image `example_image.jpg`, with a beam angle of 60 
-   degrees and a maximum candela of 1000.
+
+For example:
+```bash
+python src/image2ies.py -b 60 -c 1000 -t 5 -p 10 -o my_light.ies example_image.jpg
+```
+This will generate an IES file named `my_light.ies` based on the image `example_image.jpg`, with a beam angle of 60 
+degrees and a maximum candela of 1000.
 
 ## Contributing
 
