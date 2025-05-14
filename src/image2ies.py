@@ -183,6 +183,7 @@ def image_to_ies(
     phi_step=5.0,
     sample_type=3,
     edge_fade=False,
+    allow_spill=False,
 ):
     """
     Generates an IES file from an image, using the image's grayscale values
@@ -207,17 +208,20 @@ def image_to_ies(
     """
     try:
         if source_ies:
+            # Read source .ies file
             if not os.path.isfile(source_ies):
                 raise FileNotFoundError(source_ies)
             if not os.path.isfile(image_path):
                 raise FileNotFoundError(image_path)
             from luxpy import iolidfiles as iolid
-            LID = iolid.read_lamp_data(source_ies)
-            print('LID keys:', LID.keys())
-            print(LID['values'])
-            pixels = LID['values']
-            # iolid.draw_lid(LID)
-            exit()
+            LID = iolid.read_lamp_data(source_ies, normalize=None)
+            # Overwrite values to fit with the source
+            theta_step = LID['map']['thetas'][-1] / (len(LID['map']['thetas']) - 1)
+            phi_step = LID['map']['phis'][-1] / (len(LID['map']['phis']) - 1)
+            source_theta = LID['map']['thetas']
+            source_phi = LID['map']['phis'][:-1]
+            source_distribution = LID['map']['values'][:-1]
+            edge_fade = False
 
         if image_path == "white":
             image_file = "user defined shape"
@@ -239,9 +243,16 @@ def image_to_ies(
         # Calculate the radius of the largest centered circle
         radius = min(width, height) // 2
         beam_angle_deg = beam_angle / 2 + theta_step
+        if source_ies:
+            # Ensure beam angle we are using is valid by finding closest theta angle
+            beam_angle_deg = min(LID['map']['thetas'][::-1], key=lambda u:abs(u - beam_angle_deg))
         if edge_fade:
             match edge_fade:
                 case [a, b, c, *_]: # at least 3 values
+                    if c > 0.9:
+                        c = 0.9
+                    elif c < 0.0:
+                        c = 0.0
                     edge_fade = [a, b, c]
                     beam_angle_deg += b
                 case [a, b]:
@@ -277,6 +288,17 @@ def image_to_ies(
 
         # Calculate luminous intensity
         intensity_data = polarImage * max_candela / max_pixel_value
+        if source_ies:
+            # Extract affected area from source, then modify with gobo pattern
+            gobo_area = source_distribution[0:len(unique_phi), 0:len(unique_theta)] #int(beam_angle_deg/theta_step)]
+            source_distribution[0:len(unique_phi), 0:len(unique_theta)] = gobo_area * (polarImage / max_pixel_value)
+            # to add image to source .ies file use this:
+            # source_distribution[0:len(unique_phi), 0:len(unique_theta)] = np.add(gobo_area, intensity_data)
+            if not allow_spill:
+                source_distribution[0:len(unique_phi), len(unique_theta):len(source_theta)] = 0.0
+            intensity_data = source_distribution
+            unique_theta = source_theta
+            unique_phi = source_phi
         if edge_fade:
             fade_values = s_curve(
                 unique_theta,
@@ -329,13 +351,14 @@ def get_command_line():
     '''
     parser = argparse.ArgumentParser(description="Generate IES files from an image.")
     parser.add_argument("image_file", metavar="<image.jpg>", help="Path to the image.")
-    parser.add_argument("-o", "--output", metavar="<output.ies>", help="Output filename.")
+    parser.add_argument("-o", "--output", metavar="<output.ies>", help="Output filename, defaults to same name as image with .ies extension.")
     parser.add_argument("-s", "--source", metavar="<source.ies>", help="Filename of an .ies file to use as the source distribution.")
+    parser.add_argument("-a", "--allow_spill", action="store_true", help="If using <source.ies>, allow spill light from beyond beam angle.")
     parser.add_argument("-b", "--beam_angle", type=float, default=30, help="Beam angle for the IES generation (degrees).")
+    parser.add_argument("-e", "--edge_fade", nargs="*", type=float, default=False, help="Fade edge optionally followed by up to 3 values to specify shape: [WIDTH_INSIDE_BEAM], [WIDTH_OUTSIDE_BEAM] (degrees), and [SLOPE] (ratio).")
     parser.add_argument("-c", "--max_candela", type=float, default=1000, help="Maximum candela value for the IES generation.")
     parser.add_argument("-t", "--theta_step", type=float, default=1.0, help="Step size for vertical angles (theta) in degrees. Defaults to %(default)s°.")
     parser.add_argument("-p", "--phi_step", type=float, default=2.5, help="Step size for horizontal angles (phi) in degrees. Defaults to %(default)s°.")
-    parser.add_argument("-e", "--edge_fade", nargs="*", type=float, default=False, help="Fade edge optionally followed by to 3 values to specify shape\n[width inside beam], [width outside beam] (degrees), and [slope] (ratio)")
     args = parser.parse_args()
 
     # sanity and rule checks
@@ -397,4 +420,5 @@ if __name__ == "__main__":
         theta_step=args.theta_step,
         phi_step=args.phi_step,
         edge_fade=edge_fade,
+        allow_spill=args.allow_spill
     )
