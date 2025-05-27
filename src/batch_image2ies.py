@@ -1,8 +1,16 @@
 import os
 import argparse
 import sys
+import glob
 
-def process_images_in_directory(directory, beam_angle, max_candela, theta_step, phi_step):
+# Import image2ies.py.  We assume it's in the same directory
+# or that the user has added the current directory to their Python path.
+import image2ies
+
+_IMAGE_FILETYPES_ = (".png", ".jpg", ".jpeg")
+
+
+def process_images_in_directory(directory, beam_angle, max_candela, **kwargs):
     """
     Processes all images in a directory (non-recursively) using image2ies.py
     to generate IES files.
@@ -11,62 +19,64 @@ def process_images_in_directory(directory, beam_angle, max_candela, theta_step, 
         directory (str): Path to the directory containing the images.
         beam_angle (float): Beam angle for the IES generation.
         max_candela (float): Maximum candela value for the IES generation.
-        theta_step (float): Theta step for IES generation
-        phi_step (float): Phi step for IES generation
+        **kwargs: other values from command line to be passed through to ies generation function
     """
     # Ensure the directory path is valid
-    if not os.path.isdir(directory):
+    if os.path.isdir(directory):
+        directory = os.path.join(directory, "*")
+    elif "*" in directory or "?" not in directory:
         print(f"Error: Directory not found: {directory}")
         return
 
     # Iterate through all files in the directory
-    for filename in os.listdir(directory):
+    for file in glob.glob(directory):
         # Construct the full file path
-        filepath = os.path.join(directory, filename)
+        filename = os.path.basename(file)
+        filepath = os.path.dirname(file)
 
-        # Check if it's a file and an image (you might want to expand the image type check)
-        if os.path.isfile(filepath) and filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+        # Check if it's a file and an image
+
+        if (
+            os.path.isfile(file)
+            and os.path.splitext(filename)[1].lower() in _IMAGE_FILETYPES_
+        ):
             # Construct the output IES file path
             ies_filename = os.path.splitext(filename)[0] + ".ies"
-            ies_filepath = os.path.join(directory, ies_filename)
+            ies_filepath = os.path.join(filepath, ies_filename)
 
-            print(f"Processing image: {filename}")
+            print(f"Processing image: {file}")
             print(f"      Output IES: {ies_filepath}")
 
             try:
-                # Import image2ies.py.  We assume it's in the same directory
-                # or that the user has added the current directory to their Python path.
-                import image2ies
                 # Call the image_to_ies function directly
                 image2ies.image_to_ies(
-                    filepath,
+                    file,
                     beam_angle,
                     max_candela,
-                    ies_filepath,
-                    theta_step,
-                    phi_step
+                    **kwargs,
                 )
-
             except Exception as e:
                 print(f"  Error generating IES file for {filename}:")
                 print(f"  Exception: {e}")
+        elif not (os.path.isfile(file) or os.path.isdir(file)):
+            print(f"  File not found: {filename}")
 
-def main():
+
+if __name__ == "__main__":
     """
     Main function to parse command line arguments and call the processing function.
     """
-    parser = argparse.ArgumentParser(description="Generate IES files from images in a directory.")
-    parser.add_argument("directory", help="Path to the directory containing the images.")
-    parser.add_argument("beam_angle", type=float, help="Beam angle for the IES generation (degrees).")
-    parser.add_argument("max_candela", type=float, help="Maximum candela value for the IES generation.")
-    parser.add_argument("--theta_step", type=float, default=1.0, help="Step size for vertical angles (theta) in degrees. Defaults to 1.0.")
-    parser.add_argument("--phi_step", type=float, default=5.0, help="Step size for horizontal angles (phi) in degrees. Defaults to 5.0.")
-
-    args = parser.parse_args()
+    args = vars(image2ies.get_command_line(wildcards=True))
+    kwargs = {
+        k: v
+        for (k, v) in args.items()
+        if k not in ("directory", "beam_angle", "max_candela")
+    }
 
     # Call the function to process the images
-    process_images_in_directory(args.directory, args.beam_angle, args.max_candela, args.theta_step, args.phi_step)
-
-if __name__ == "__main__":
-    main()
-
+    process_images_in_directory(
+        args["directory"],
+        args["beam_angle"],
+        args["max_candela"],
+        **kwargs,
+    )

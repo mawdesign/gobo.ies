@@ -177,8 +177,8 @@ def image_to_ies(
     image_path,
     beam_angle,
     max_candela,
-    filename="output.ies",
-    source_ies=False,
+    output=None,
+    source=False,
     theta_step=5.0,
     phi_step=5.0,
     sample_type=3,
@@ -194,7 +194,7 @@ def image_to_ies(
         beam_angle (float): The beam angle of the light source in degrees.
         max_candela (float): The maximum luminous intensity (candela) of the
                            light source.
-        filename (str, optional): The name of the output IES file.
+        output (str, optional): The name of the output IES file.
             Defaults to "output.ies".
         theta_step (float, optional): Step size for vertical angles (theta) in degrees.
             Defaults to 5.0 degrees.
@@ -206,15 +206,36 @@ def image_to_ies(
             1 - bilinear
             3 - bicubic
     """
+
+    # verify input image file
     try:
-        if source_ies:
+        img = Image.open(image_path)
+        img.close()
+        filepath = os.path.dirname(image_path)
+    except FileNotFoundError:
+        if image_path.lower() == "white":
+            image_path = "white"
+            filepath = ""
+        else:
+            raise
+
+    # verify output .ies file
+    if output is None:
+        output = os.path.join(filepath, os.path.splitext(os.path.basename(image_path))[0] + ".ies")
+    elif os.path.splitext(os.path.basename(output))[1].lower() != ".ies":
+        if os.path.dirname(output) != "":
+            filepath = os.path.dirname(output)
+        output = os.path.join(filepath, os.path.splitext(os.path.basename(output))[0] + ".ies")
+
+    try:
+        if source:
             # Read source .ies file
-            if not os.path.isfile(source_ies):
-                raise FileNotFoundError(source_ies)
+            if not os.path.isfile(source):
+                raise FileNotFoundError(source)
             if not os.path.isfile(image_path):
                 raise FileNotFoundError(image_path)
             from luxpy import iolidfiles as iolid
-            LID = iolid.read_lamp_data(source_ies, normalize=None)
+            LID = iolid.read_lamp_data(source, normalize=None)
             # Overwrite values to fit with the source
             theta_step = LID['map']['thetas'][-1] / (len(LID['map']['thetas']) - 1)
             phi_step = LID['map']['phis'][-1] / (len(LID['map']['phis']) - 1)
@@ -243,9 +264,10 @@ def image_to_ies(
         # Calculate the radius of the largest centered circle
         radius = min(width, height) // 2
         beam_angle_deg = beam_angle / 2 + theta_step
-        if source_ies:
+        if source:
             # Ensure beam angle we are using is valid by finding closest theta angle
             beam_angle_deg = min(LID['map']['thetas'][::-1], key=lambda u:abs(u - beam_angle_deg))
+
         if edge_fade:
             match edge_fade:
                 case [a, b, c, *_]: # at least 3 values
@@ -288,7 +310,7 @@ def image_to_ies(
 
         # Calculate luminous intensity
         intensity_data = polarImage * max_candela / max_pixel_value
-        if source_ies:
+        if source:
             # Extract affected area from source, then modify with gobo pattern
             gobo_area = source_distribution[0:len(unique_phi), 0:len(unique_theta)] #int(beam_angle_deg/theta_step)]
             source_distribution[0:len(unique_phi), 0:len(unique_theta)] = gobo_area * (polarImage / max_pixel_value)
@@ -333,10 +355,10 @@ def image_to_ies(
         )
 
         # Save the IES string to a file
-        with open(filename, "w") as f:
+        with open(output, "w") as f:
             f.write(ies_string)
 
-        print(f"IES file successfully generated: {filename}")
+        print(f"IES file successfully generated: {output}")
 
     except FileNotFoundError:
         print(f"Error: Image file not found at {image_path}")
@@ -345,12 +367,19 @@ def image_to_ies(
         print(f"An error occurred: {e} in line {exc_tb.tb_lineno}")
 
 
-def get_command_line():
+def get_command_line(wildcards=False):
     '''
     Get command line arguments
+
+    Args:
+        wildcard (bool): True = accept directory or wildcard list of files.
     '''
-    parser = argparse.ArgumentParser(description="Generate IES files from an image.")
-    parser.add_argument("image_file", metavar="<image.jpg>", help="Path to the image.")
+    if wildcards:
+        parser = argparse.ArgumentParser(description="Generate IES gobo files from images in a directory.")
+        parser.add_argument("directory", help="Path to the directory containing the images (wildcards allowed).")
+    else:
+        parser = argparse.ArgumentParser(description="Generate IES gobo files from an image.")
+        parser.add_argument("image_file", metavar="<image.jpg>", help="Path to the image.")
     parser.add_argument("-o", "--output", metavar="<output.ies>", help="Output filename, defaults to same name as image with .ies extension.")
     parser.add_argument("-s", "--source", metavar="<source.ies>", help="Filename of an .ies file to use as the source distribution.")
     parser.add_argument("-a", "--allow_spill", action="store_true", help="If using <source.ies>, allow spill light from beyond beam angle.")
@@ -362,63 +391,29 @@ def get_command_line():
     args = parser.parse_args()
 
     # sanity and rule checks
-    if args.image_file.lower() != "white" and not os.path.isfile(args.image_file):
+    if not wildcards and args.image_file.lower() != "white" and not os.path.isfile(args.image_file):
         raise FileNotFoundError(image_path)
+
     if args.source:
         args.edge_fade = False
         if not os.path.isfile(args.source):
             raise FileNotFoundError(args.source)
-        if not os.path.isfile(args.image_file):
+        if args.image_file.lower() == "white":
             raise FileNotFoundError(image_path)
 
     return args
 
 if __name__ == "__main__":
     """
-    Main function to parse command line arguments and call the processing function.
+    Main function to get command line arguments and call the processing function.
     """
-    args = get_command_line()
-
-    # verify input image file
-    try:
-        img = Image.open(args.image_file)
-        img.close()
-        image_file = args.image_file
-    except FileNotFoundError:
-        if args.image_file.lower() == "white":
-            image_file = "white"
-        else:
-            raise
-
-    # verify output .ies file
-    if args.output is None:
-        output_filename = os.path.splitext(os.path.basename(args.image_file))[0] + ".ies"
-    elif os.path.splitext(args.output)[1].lower() != ".ies":
-        output_filename = os.path.splitext(args.output)[0] + ".ies"
-    else:
-        output_filename = str(args.output)
-
-    match args.edge_fade:
-        case [a, b, c, *_]: # at least 3 values
-            edge_fade = [a, b, c]
-        case [a, b]:
-            edge_fade = [a, b, 0.5]
-        case [a]:
-            edge_fade = [a, a, 0.5]
-        case [] | True:
-            edge_fade = [args.theta_step, args.theta_step, 0.5]
-        case _:
-            edge_fade = False
+    args = vars(get_command_line())
+    kwargs = {k: v for (k, v) in args.items() if k not in ("image_file", "beam_angle", "max_candela")}
 
     # Call the function to process the image
     image_to_ies(
-        image_file,
-        args.beam_angle,
-        args.max_candela,
-        filename=output_filename,
-        source_ies=args.source,
-        theta_step=args.theta_step,
-        phi_step=args.phi_step,
-        edge_fade=edge_fade,
-        allow_spill=args.allow_spill
+        args["image_file"],
+        args["beam_angle"],
+        args["max_candela"],
+        **kwargs,
     )
