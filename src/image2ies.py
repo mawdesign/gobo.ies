@@ -8,7 +8,9 @@ import sys
 import textwrap
 
 
-def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, image_file = "image"):
+def generate_ies_string(
+    header_data, lamp_data, v_angles, h_angles, candelas, image_file="image"
+):
     """
     Generates an IES file string from the provided photometric data.
 
@@ -41,7 +43,7 @@ def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, im
     if v_angles[-1] not in (90, 180) and v_angles[-1] < 180:
         curr_angle = v_angles[-1]
         theta_step = v_angles[-1] - v_angles[-2]
-        zero_col = np.zeros((len(candelas),1))
+        zero_col = np.zeros((len(candelas), 1))
         while curr_angle not in (90, 180) and curr_angle < 180:
             curr_angle += theta_step
             candelas = np.hstack((candelas, zero_col))
@@ -50,7 +52,9 @@ def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, im
         if v_angles[-2] < 180:
             v_angles[-1] = 180
         else:
-            raise Exception(f"vertical angles (theta values) exceed 180° (..., {v_angles[-3]}, {v_angles[-2]}, {v_angles[-1]})")
+            raise Exception(
+                f"vertical angles (theta values) exceed 180° (..., {v_angles[-3]}, {v_angles[-2]}, {v_angles[-1]})"
+            )
 
     # IES file header
     ies_header = "IES:LM-63-2019\n"
@@ -116,9 +120,11 @@ def generate_ies_string(header_data, lamp_data, v_angles, h_angles, candelas, im
     for ln in ies_string.splitlines():
         lnum += 1
         if len(ln) > 256:
-            long_lines.append((lnum,len(ln)))
+            long_lines.append((lnum, len(ln)))
     if long_lines:
-        print(f"{len(long_lines)} line{'s' if len(long_lines) != 1 else ''} exceed{'s' if len(long_lines) == 1 else ''} 256 characters.")
+        print(
+            f"{len(long_lines)} line{'s' if len(long_lines) != 1 else ''} exceed{'s' if len(long_lines) == 1 else ''} 256 characters."
+        )
         print(f"(e.g. line {long_lines[0][0]} is {long_lines[0][1]} characters)")
     return ies_string
 
@@ -173,6 +179,64 @@ def s_curve(x, median=0.5, slope=0.5, start=0, end=1, minimum=0, maximum=1):
     return y
 
 
+def render_ies_image(
+    ies_string,
+    output_image_path="ies_distribution.png",
+    image_size=100,
+):
+    """
+    Creates an image visualization of the intensity distribution from an IES string.
+
+    Args:
+        ies_string (str): The IES file content as a string.
+        output_image_path (str): The path where the output image will be saved.
+                                 Defaults to "ies_distribution.png".
+        image_size (int): Width and Length of output image. Defaults to 100.
+    """
+    try:
+        # Read the IES string into a luxpy photometric data object
+        from luxpy import iolidfiles as iolid
+
+        ies_data = iolid.read_lamp_data(ies_string)
+
+        # Ensure the photometric data is valid for rendering
+        if not ies_data:
+            raise ValueError("Failed to parse IES string into luxpy photometric data.")
+
+        # Render the LID (Luminous Intensity Distribution)
+        render = iolid.render_lid(
+            ies_data,
+            sensor_resolution=image_size,
+            out="Lv2D",
+            wall_center=[0, 2, 2],
+            wall_n=[0, -1, 0],
+            wall_width=4,
+            wall_height=4,
+            sensor_position=[0, 0, 2],
+            sensor_n=[0, 1, 0],
+            luminaire_position=[0, 1, 2],
+            luminaire_n=[0, 0.9, 0.1],
+            ax2D=False,
+            ax3D=False,
+        )
+
+        # Adjust image brightness / exposure
+        image_max = render.max() if render.max() != 0.0 else 1
+        render = (render * 255.9 / image_max).astype(np.uint8)
+
+        # Save the render to an image file
+        img = Image.fromarray(render, mode="L").transpose(method=Image.FLIP_LEFT_RIGHT)
+        img.save(output_image_path)
+
+        print(f"Preview image saved to: {output_image_path}")
+
+    except ImportError:
+        print("Error: luxpy is required to render the IES distribution image.")
+        print("Please install it using: pip install luxpy")
+    except Exception as e:
+        print(f"An error occurred while rendering the IES distribution image: {e}")
+
+
 def image_to_ies(
     image_path,
     beam_angle,
@@ -184,6 +248,7 @@ def image_to_ies(
     sample_type=3,
     edge_fade=False,
     allow_spill=False,
+    preview=False,
 ):
     """
     Generates an IES file from an image, using the image's grayscale values
@@ -221,11 +286,15 @@ def image_to_ies(
 
     # verify output .ies file
     if output is None:
-        output = os.path.join(filepath, os.path.splitext(os.path.basename(image_path))[0] + ".ies")
+        output = os.path.join(
+            filepath, os.path.splitext(os.path.basename(image_path))[0] + ".ies"
+        )
     elif os.path.splitext(os.path.basename(output))[1].lower() != ".ies":
         if os.path.dirname(output) != "":
             filepath = os.path.dirname(output)
-        output = os.path.join(filepath, os.path.splitext(os.path.basename(output))[0] + ".ies")
+        output = os.path.join(
+            filepath, os.path.splitext(os.path.basename(output))[0] + ".ies"
+        )
 
     try:
         if source:
@@ -235,13 +304,14 @@ def image_to_ies(
             if not os.path.isfile(image_path):
                 raise FileNotFoundError(image_path)
             from luxpy import iolidfiles as iolid
+
             LID = iolid.read_lamp_data(source, normalize=None)
             # Overwrite values to fit with the source
-            theta_step = LID['map']['thetas'][-1] / (len(LID['map']['thetas']) - 1)
-            phi_step = LID['map']['phis'][-1] / (len(LID['map']['phis']) - 1)
-            source_theta = LID['map']['thetas']
-            source_phi = LID['map']['phis'][:-1]
-            source_distribution = LID['map']['values'][:-1]
+            theta_step = LID["map"]["thetas"][-1] / (len(LID["map"]["thetas"]) - 1)
+            phi_step = LID["map"]["phis"][-1] / (len(LID["map"]["phis"]) - 1)
+            source_theta = LID["map"]["thetas"]
+            source_phi = LID["map"]["phis"][:-1]
+            source_distribution = LID["map"]["values"][:-1]
             edge_fade = False
 
         if image_path == "white":
@@ -253,24 +323,25 @@ def image_to_ies(
             image_file = os.path.basename(image_path)
             # Open the image using PIL (Pillow)
             with Image.open(image_path) as img:
-                img = img.convert("L") #.rotate(90) # Convert to grayscale and rotate
+                img = img.convert("L")  # .rotate(90) # Convert to grayscale and rotate
                 img = ImageOps.mirror(img)  # Mirror
                 pixels = np.array(img)
                 width, height = img.size
         else:
             raise FileNotFoundError(image_path)
 
-
         # Calculate the radius of the largest centered circle
         radius = min(width, height) // 2
         beam_angle_deg = beam_angle / 2 + theta_step
         if source:
             # Ensure beam angle we are using is valid by finding closest theta angle
-            beam_angle_deg = min(LID['map']['thetas'][::-1], key=lambda u:abs(u - beam_angle_deg))
+            beam_angle_deg = min(
+                LID["map"]["thetas"][::-1], key=lambda u: abs(u - beam_angle_deg)
+            )
 
         if edge_fade:
             match edge_fade:
-                case [a, b, c, *_]: # at least 3 values
+                case [a, b, c, *_]:  # at least 3 values
                     if c > 0.9:
                         c = 0.9
                     elif c < 0.0:
@@ -312,12 +383,18 @@ def image_to_ies(
         intensity_data = polarImage * max_candela / max_pixel_value
         if source:
             # Extract affected area from source, then modify with gobo pattern
-            gobo_area = source_distribution[0:len(unique_phi), 0:len(unique_theta)] #int(beam_angle_deg/theta_step)]
-            source_distribution[0:len(unique_phi), 0:len(unique_theta)] = gobo_area * (polarImage / max_pixel_value)
+            gobo_area = source_distribution[
+                0 : len(unique_phi), 0 : len(unique_theta)
+            ]  # int(beam_angle_deg/theta_step)]
+            source_distribution[0 : len(unique_phi), 0 : len(unique_theta)] = (
+                gobo_area * (polarImage / max_pixel_value)
+            )
             # to add image to source .ies file use this:
             # source_distribution[0:len(unique_phi), 0:len(unique_theta)] = np.add(gobo_area, intensity_data)
             if not allow_spill:
-                source_distribution[0:len(unique_phi), len(unique_theta):len(source_theta)] = 0.0
+                source_distribution[
+                    0 : len(unique_phi), len(unique_theta) : len(source_theta)
+                ] = 0.0
             intensity_data = source_distribution
             unique_theta = source_theta
             unique_phi = source_phi
@@ -327,7 +404,7 @@ def image_to_ies(
                 start=beam_angle / 2 + edge_fade[0],
                 end=beam_angle / 2 - edge_fade[1],
                 median=beam_angle / 2,
-                slope=edge_fade[2]
+                slope=edge_fade[2],
             )
             intensity_data = np.multiply(intensity_data, fade_values)
 
@@ -360,6 +437,9 @@ def image_to_ies(
 
         print(f"IES file successfully generated: {output}")
 
+        if preview:
+            render_ies_image(ies_string)
+
     except FileNotFoundError:
         print(f"Error: Image file not found at {image_path}")
     except Exception as e:
@@ -368,30 +448,89 @@ def image_to_ies(
 
 
 def get_command_line(wildcards=False):
-    '''
+    """
     Get command line arguments
 
     Args:
         wildcard (bool): True = accept directory or wildcard list of files.
-    '''
+    """
     if wildcards:
-        parser = argparse.ArgumentParser(description="Generate IES gobo files from images in a directory.")
-        parser.add_argument("directory", help="Path to the directory containing the images (wildcards allowed).")
+        parser = argparse.ArgumentParser(
+            description="Generate IES gobo files from images in a directory."
+        )
+        parser.add_argument(
+            "directory",
+            help="Path to the directory containing the images (wildcards allowed).",
+        )
     else:
-        parser = argparse.ArgumentParser(description="Generate IES gobo files from an image.")
-        parser.add_argument("image_file", metavar="<image.jpg>", help="Path to the image.")
-    parser.add_argument("-o", "--output", metavar="<output.ies>", help="Output filename, defaults to same name as image with .ies extension.")
-    parser.add_argument("-s", "--source", metavar="<source.ies>", help="Filename of an .ies file to use as the source distribution.")
-    parser.add_argument("-a", "--allow_spill", action="store_true", help="If using <source.ies>, allow spill light from beyond beam angle.")
-    parser.add_argument("-b", "--beam_angle", type=float, default=30, help="Beam angle for the IES generation (degrees).")
-    parser.add_argument("-e", "--edge_fade", nargs="*", type=float, default=False, help="Fade edge optionally followed by up to 3 values to specify shape: [WIDTH_INSIDE_BEAM], [WIDTH_OUTSIDE_BEAM] (degrees), and [SLOPE] (ratio).")
-    parser.add_argument("-c", "--max_candela", type=float, default=1000, help="Maximum candela value for the IES generation.")
-    parser.add_argument("-t", "--theta_step", type=float, default=1.0, help="Step size for vertical angles (theta) in degrees. Defaults to %(default)s°.")
-    parser.add_argument("-p", "--phi_step", type=float, default=2.5, help="Step size for horizontal angles (phi) in degrees. Defaults to %(default)s°.")
+        parser = argparse.ArgumentParser(
+            description="Generate IES gobo files from an image."
+        )
+        parser.add_argument(
+            "image_file", metavar="<image.jpg>", help="Path to the image."
+        )
+    parser.add_argument(
+        "-o",
+        "--output",
+        metavar="<output.ies>",
+        help="Output filename, defaults to same name as image with .ies extension.",
+    )
+    parser.add_argument(
+        "-s",
+        "--source",
+        metavar="<source.ies>",
+        help="Filename of an .ies file to use as the source distribution.",
+    )
+    parser.add_argument(
+        "-a",
+        "--allow_spill",
+        action="store_true",
+        help="If using <source.ies>, allow spill light from beyond beam angle.",
+    )
+    parser.add_argument(
+        "-b",
+        "--beam_angle",
+        type=float,
+        default=30.0,
+        help="Beam angle for the IES generation (degrees).",
+    )
+    parser.add_argument(
+        "-e",
+        "--edge_fade",
+        nargs="*",
+        type=float,
+        default=False,
+        help="Fade edge optionally followed by up to 3 values to specify shape: [WIDTH_INSIDE_BEAM], [WIDTH_OUTSIDE_BEAM] (degrees), and [SLOPE] (ratio).",
+    )
+    parser.add_argument(
+        "-c",
+        "--max_candela",
+        type=float,
+        default=1000.0,
+        help="Maximum candela value for the IES generation.",
+    )
+    parser.add_argument(
+        "-t",
+        "--theta_step",
+        type=float,
+        default=1.0,
+        help="Step size for vertical angles (theta) in degrees. Defaults to %(default)s°.",
+    )
+    parser.add_argument(
+        "-p",
+        "--phi_step",
+        type=float,
+        default=2.5,
+        help="Step size for horizontal angles (phi) in degrees. Defaults to %(default)s°.",
+    )
     args = parser.parse_args()
 
     # sanity and rule checks
-    if not wildcards and args.image_file.lower() != "white" and not os.path.isfile(args.image_file):
+    if (
+        not wildcards
+        and args.image_file.lower() != "white"
+        and not os.path.isfile(args.image_file)
+    ):
         raise FileNotFoundError(image_path)
 
     if args.source:
@@ -403,12 +542,17 @@ def get_command_line(wildcards=False):
 
     return args
 
+
 if __name__ == "__main__":
     """
     Main function to get command line arguments and call the processing function.
     """
     args = vars(get_command_line())
-    kwargs = {k: v for (k, v) in args.items() if k not in ("image_file", "beam_angle", "max_candela")}
+    kwargs = {
+        k: v
+        for (k, v) in args.items()
+        if k not in ("image_file", "beam_angle", "max_candela")
+    }
 
     # Call the function to process the image
     image_to_ies(
