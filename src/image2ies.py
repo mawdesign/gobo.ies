@@ -7,6 +7,8 @@ import datetime
 import sys
 import textwrap
 
+_IMAGE_FILETYPES_ = (".png", ".jpg", ".jpeg")
+
 
 def generate_ies_string(
     header_data, lamp_data, v_angles, h_angles, candelas, image_file="image"
@@ -182,7 +184,7 @@ def s_curve(x, median=0.5, slope=0.5, start=0, end=1, minimum=0, maximum=1):
 def render_ies_image(
     ies_string,
     output_image_path="ies_distribution.png",
-    image_size=100,
+    image_size=None,
 ):
     """
     Creates an image visualization of the intensity distribution from an IES string.
@@ -203,29 +205,79 @@ def render_ies_image(
         if not ies_data:
             raise ValueError("Failed to parse IES string into luxpy photometric data.")
 
+        # Ensure output filename is an image
+        # (allows auto naming based on the .ies filename)
+        if (
+            os.path.splitext(os.path.basename(output_image_path))[1].lower()
+            not in _IMAGE_FILETYPES_
+        ):
+            output_image_path = os.path.join(
+                os.path.dirname(output_image_path),
+                os.path.splitext(os.path.basename(output_image_path))[0]
+                + "-preview.png",
+            )
+
+        # determine image dimensions
+        # defaults to a thumbnail size of 100 x 100
+        match image_size:
+            case [a, b, c, *_]:  # at least 3 values
+                image_width = int(a)
+                image_height = int(b)
+                image_zoom = float(c.rstrip("xX "))
+            case [a, b]:
+                if b.lower().strip()[-1] == "x":
+                    image_width = image_height = int(a)
+                    image_zoom = float(b.rstrip("xX "))
+                else:
+                    image_width = int(a)
+                    image_height = int(b)
+                    image_zoom = 1
+            case [a]:
+                if a.lower().strip()[-1] == "x":
+                    image_width = image_height = 100
+                    image_zoom = float(a.rstrip("xX "))
+                else:
+                    image_width = image_height = int(a)
+                    image_zoom = 1
+            case _:
+                image_width = image_height = 100
+                image_zoom = 1
+        image_fov = (90, 90)
+        image_fov = tuple(x / image_zoom for x in image_fov)
+
         # Render the LID (Luminous Intensity Distribution)
-        render = iolid.render_lid(
+        render, image_max = iolid.render_lid(
             ies_data,
-            sensor_resolution=image_size,
-            out="Lv2D",
+            sensor_resolution=max(image_width, image_height),
+            sensor_position=[0, 0, 2],
+            sensor_n=[0, 1, 0],
+            fov=image_fov,
+            out="(Lv2D, maxL)",
             wall_center=[0, 2, 2],
             wall_n=[0, -1, 0],
             wall_width=4,
             wall_height=4,
-            sensor_position=[0, 0, 2],
-            sensor_n=[0, 1, 0],
             luminaire_position=[0, 1, 2],
-            luminaire_n=[0, 0.9, 0.1],
+            luminaire_n=[0, 1, 0],
             ax2D=False,
             ax3D=False,
         )
 
         # Adjust image brightness / exposure
-        image_max = render.max() if render.max() != 0.0 else 1
-        render = (render * 255.9 / image_max).astype(np.uint8)
+        if image_max != 0.0:
+            render = (render * 255.9 / image_max).astype(np.uint8)
+        else:
+            render = render.astype(np.uint8)
 
         # Save the render to an image file
         img = Image.fromarray(render, mode="L").transpose(method=Image.FLIP_LEFT_RIGHT)
+        if image_width != image_height:
+            size = max(image_width, image_height)
+            left = (size - image_width) / 2
+            top = (size - image_height) / 2
+            right = (size + image_width) / 2
+            bottom = (size + image_height) / 2
+            img = img.crop((left, top, right, bottom))
         img.save(output_image_path)
 
         print(f"Preview image saved to: {output_image_path}")
@@ -323,7 +375,7 @@ def image_to_ies(
             image_file = os.path.basename(image_path)
             # Open the image using PIL (Pillow)
             with Image.open(image_path) as img:
-                img = img.convert("L")  # .rotate(90) # Convert to grayscale and rotate
+                img = img.convert("L")  # Convert to grayscale
                 img = ImageOps.mirror(img)  # Mirror
                 pixels = np.array(img)
                 width, height = img.size
@@ -437,8 +489,12 @@ def image_to_ies(
 
         print(f"IES file successfully generated: {output}")
 
-        if preview:
-            render_ies_image(ies_string)
+        if preview != False:
+            render_ies_image(
+                ies_string,
+                output_image_path=output,
+                image_size=preview,
+            )
 
     except FileNotFoundError:
         print(f"Error: Image file not found at {image_path}")
@@ -482,17 +538,17 @@ def get_command_line(wildcards=False):
         help="Filename of an .ies file to use as the source distribution.",
     )
     parser.add_argument(
-        "-a",
-        "--allow_spill",
-        action="store_true",
-        help="If using <source.ies>, allow spill light from beyond beam angle.",
-    )
-    parser.add_argument(
         "-b",
         "--beam_angle",
         type=float,
         default=30.0,
         help="Beam angle for the IES generation (degrees).",
+    )
+    parser.add_argument(
+        "-a",
+        "--allow_spill",
+        action="store_true",
+        help="If using <source.ies>, allow spill light from beyond beam angle.",
     )
     parser.add_argument(
         "-e",
@@ -522,6 +578,14 @@ def get_command_line(wildcards=False):
         type=float,
         default=2.5,
         help="Step size for horizontal angles (phi) in degrees. Defaults to %(default)s°.",
+    )
+    parser.add_argument(
+        "--preview",
+        "--thumb",
+        nargs="*",
+        default=False,
+        help="Generate a preview image optionally followed by up to 3 values to specify size: [WIDTH], [HEIGHT] (pixels), and [ZOOM]x. "
+        "If default width = 100px, default height = width, default zoom = 1x (zoom must have 'x' if not specifying width and height).",
     )
     args = parser.parse_args()
 
